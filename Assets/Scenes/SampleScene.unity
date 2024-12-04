@@ -267,7 +267,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4f596421a5576514185055edc329695a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  TestArray: 01000000020000000500000006000000
+  Scriptable: {fileID: 11400000, guid: f360dcf83e7bfcb4f8b795d828a921fb, type: 2}
 --- !u!1 &705507993
 GameObject:
   m_ObjectHideFlags: 0
@@ -532,7 +532,10 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   NestedTest:
-    Var: 5
+    Var: 69
+    Texts:
+    - Hallo
+    - Du
 --- !u!4 &1954515986
 Transform:
   m_ObjectHideFlags: 0

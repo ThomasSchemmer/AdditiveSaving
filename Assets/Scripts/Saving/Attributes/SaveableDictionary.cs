@@ -12,7 +12,6 @@ public class SaveableDictionary : SaveableData
         return _Write(DicValue, Name);
     }
 
-
     public static new List<byte> _Write(object DicValue, string Name)
     {
         List<byte> InnerData = new();
@@ -56,23 +55,53 @@ public class SaveableDictionary : SaveableData
 
     private static List<byte> WriteDicTypeHeader(object Obj, string Name, int InnerLength)
     {
+        if (Obj is not IDictionary Dic)
+            return new();
+
         /*
-         * Var:    Type | Hash  | InnerLen    
-         * #Byte:    1  | 4     | 4 
+         * Var:    Type | Hash | GenericNameLength1 | GenericName1 | GenericNameLength2 | GenericName2 | InnerLen    
+         * #Byte:    1  | 4    | 4                  | 0..x         | 4                  | 0..x         | 4 
          */
         List<byte> Header = WriteTypeHeader(Obj, Name, VariableType.DictionaryStart);
+
+        var GenArgs = Dic.GetType().GetGenericArguments();
+        Type TypeA = GenArgs[0];
+        Type TypeB = GenArgs[1];
+
+        string TypeAName = TypeA.AssemblyQualifiedName;
+        Header.AddRange(ToBytes(TypeAName.Length));
+        Header.AddRange(ToBytes(TypeAName));
+        string TypeBName = TypeB.AssemblyQualifiedName;
+        Header.AddRange(ToBytes(TypeBName.Length));
+        Header.AddRange(ToBytes(TypeBName));
+
         Header.AddRange(ToBytes(InnerLength));
         return Header;
     }
 
-    public static new object _ReadVar(byte[] Data, Tuple<VariableType, int, int> LoadedEnum)
+    public static int GetHeaderOffset(byte[] Data, int Index)
     {
-        // skip header info
-        int Start = LoadedEnum.Item3 + sizeof(int);
-        int End = LoadedEnum.Item3 + GetDictionaryHeaderOffset(Data, LoadedEnum.Item3);
+        int TypeAOffset = GetStringVarOffset(Data, Index);
+        Index += TypeAOffset;
+        int TypeBOffset = GetStringVarOffset(Data, Index);
+        Index += TypeBOffset;
 
+        ReadInt(Data, Index, out int Length);
+        return Length + sizeof(int) + TypeAOffset + TypeBOffset;
+    }
+
+    public static new object _ReadVar(byte[] Data, Tuple<VariableType, int, int> LoadedDict)
+    {
+        int Index = ReadDictTypeHeader(Data, LoadedDict.Item3 - GetBaseHeaderOffset(), out Type KeysType, out Type VarsType, out var InnerLength);
+
+        var Types = new Type[2] { KeysType, VarsType };
+        Type DictType = typeof(SerializedDictionary<,>);
+        DictType = DictType.MakeGenericType(Types);
+        IDictionary Dict = Activator.CreateInstance(DictType) as IDictionary;
+
+        int Start = Index;
+        int End = Index + InnerLength;
         IterateData(Data, Start, End, out var FoundVars);
-        List<Tuple<object, object>> GenericList = new();
 
         for (int i = 0; i < FoundVars.Count; i += 2)
         {
@@ -81,10 +110,29 @@ public class SaveableDictionary : SaveableData
 
             object FoundKey = ReadVar(Data, FoundVars[i]);
             object FoundValue = ReadVar(Data, FoundVars[2]);
-            GenericList.Add(new(FoundKey, FoundValue));
+            Dict.Add(FoundKey, FoundValue);
         }
 
-        return GenericList;
+        return Dict;
+    }
+
+
+    public static int ReadDictTypeHeader(byte[] Data, int Index, out Type KeysType, out Type VarsType, out int InnerLength)
+    {
+        Index = ReadByte(Data, Index, out byte bVarType);
+        VariableType VarType = (VariableType)bVarType;
+        if (VarType != VariableType.DictionaryStart)
+        {
+            throw new Exception("Expected a dictionary start, but found " + VarType + " instead!");
+        }
+        Index = ReadInt(Data, Index, out int _);
+        Index = ReadString(Data, Index, out string KeysName);
+        Index = ReadString(Data, Index, out string VarsName);
+        Index = ReadInt(Data, Index, out InnerLength);
+
+        KeysType = Type.GetType(KeysName);
+        VarsType = Type.GetType(VarsName);
+        return Index;
     }
 
     public static new FieldInfo _GetMatch(object Target, Tuple<VariableType, int, int> VarParams)
@@ -92,7 +140,7 @@ public class SaveableDictionary : SaveableData
         FieldInfo[] Fields = Target.GetType().GetFields();
         foreach (var Field in Fields)
         {
-            if (!IsGenericDictionary(Field.FieldType))
+            if (!Is(Field.FieldType))
                 continue;
 
             if (Field.Name.GetHashCode() != VarParams.Item2)
@@ -103,24 +151,10 @@ public class SaveableDictionary : SaveableData
         return null;
     }
 
-    public static new object _ConvertGeneric(FieldInfo Field, object Variable)
+    public static bool Is(Type Type)
     {
-        List<Tuple<object, object>> GenericList = Variable as List<Tuple<object, object>>;
-        // since we only have a list of tuples we need to infer the types from the field
-        // and then convert to it
-
-        var Types = Field.FieldType.GetGenericArguments();
-        Type DictType = typeof(SerializedDictionary<,>);
-        DictType = DictType.MakeGenericType(Types);
-        IDictionary Dict = Activator.CreateInstance(DictType) as IDictionary;
-
-        foreach (var Tuple in GenericList)
-        {
-            Dict.Add(Tuple.Item1, Tuple.Item2);
-        }
-        //var property = Type.GetProperty("Item");
-
-        //var value = property.GetValue(DicValue, new[] { key });
-        return Dict;
+        return Type.IsGenericType &&
+            (Type.GetGenericTypeDefinition() == typeof(Dictionary<,>) ||
+            Type.GetGenericTypeDefinition() == typeof(SerializedDictionary<,>));
     }
 }

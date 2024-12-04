@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Xml.Linq;
 using UnityEngine;
 using static SaveGameManager;
 
@@ -59,17 +58,31 @@ public class SaveableList : SaveableData
         return Header;
     }
 
+    public static int GetHeaderOffset(byte[] Data, int Index)
+    {
+        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
+        Index += AssemblyNameOffset;
+        ReadInt(Data, Index, out int Length);
+        return AssemblyNameOffset + Length + sizeof(int);
+    }
+
     public static new object _ReadVar(byte[] Data, Tuple<VariableType, int, int> LoadedList)
     {
-        IList List = Activator.CreateInstance(GetTypeFromVar(Data, LoadedList)) as IList;
+        int Index = ReadListTypeHeader(Data, LoadedList.Item3 - GetBaseHeaderOffset(), out int Hash, out Type ListItemType, out int InnerLength);
 
-        // skip length info
-        int StartIndex = LoadedList.Item3 + sizeof(int);
-        int EndIndex = StartIndex + GetListHeaderOffset(Data, LoadedList.Item3);
+        Type ListType = typeof(List<>);
+        ListType = ListType.MakeGenericType(ListItemType);
+        IList List = Activator.CreateInstance(ListType) as IList;
+
+        int StartIndex = Index;
+        int EndIndex = StartIndex + InnerLength;
         IterateData(Data, StartIndex, EndIndex, out var FoundListVars);
 
         for (int i = 0; i < FoundListVars.Count; i++)
         {
+            if (IsEndType(FoundListVars[i].Item1))
+                continue;
+
             object FoundListElement = ReadVar(Data, FoundListVars[i]);
             if (FoundListElement == null)
                 continue;
@@ -84,7 +97,7 @@ public class SaveableList : SaveableData
         FieldInfo[] Fields = Target.GetType().GetFields();
         foreach (var Field in Fields)
         {
-            if (!IsGenericList(Field.FieldType))
+            if (!Is(Field.FieldType))
                 continue;
 
             if (Field.Name.GetHashCode() != VarParams.Item2)
@@ -93,15 +106,6 @@ public class SaveableList : SaveableData
             return Field;
         }
         return null;
-    }
-
-    public static new Type GetTypeFromVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
-    {
-        ReadListTypeHeader(Data, FoundVar.Item3 - GetBaseHeaderOffset(), out var _, out Type GenericType, out var _);
-
-        Type ListType = typeof(List<>);
-        ListType = ListType.MakeGenericType(GenericType);
-        return ListType;
     }
 
     public static int ReadListTypeHeader(byte[] Data, int Index, out int Hash, out Type GenericType, out int InnerLength)
@@ -117,5 +121,10 @@ public class SaveableList : SaveableData
         GenericType = Type.GetType(AssemblyName);
         Index = ReadInt(Data, Index, out InnerLength);
         return Index;
+    }
+
+    public static bool Is(Type Type)
+    {
+        return (Type.IsGenericType && (Type.GetGenericTypeDefinition() == typeof(List<>)));
     }
 }

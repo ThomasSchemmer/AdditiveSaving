@@ -3,18 +3,35 @@ using System.Collections;
 using System.Collections.Generic;
 using static SaveGameManager;
 using System.Reflection;
+using UnityEngine;
 
 public class SaveableBaseType : SaveableData
 {
+
+
     public override List<byte> Write(object Obj, string Name)
     {
         return _Write(Obj, Name);
     }
 
-
     public static new List<byte> _Write(object Obj, string Name)
     {
-        return WriteKnownType(Obj, Name);
+        Type Type = Obj.GetType();
+
+        if (!Is(Type))
+            return new();
+
+        switch (TypeMap[Type])
+        {
+            case VariableType.Byte: return WriteByte(Obj, Name);
+            case VariableType.Int: return WriteInt(Obj, Name);
+            case VariableType.Uint: return WriteUInt(Obj, Name);
+            case VariableType.Double: return WriteDouble(Obj, Name);
+            case VariableType.String: return WriteString(Obj, Name);
+            case VariableType.Vector3: return WriteVector(Obj, Name);
+            default:
+                throw new Exception("Missing type registry for known type");
+        }
     }
 
     public static new object _ReadVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
@@ -42,4 +59,64 @@ public class SaveableBaseType : SaveableData
         return null;
     }
 
+
+    protected static List<byte> WriteInt(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Int);
+
+        int iValue = (int)Value;
+        Bytes.AddRange(ToBytes(iValue));
+        return Bytes;
+    }
+
+    protected static List<byte> WriteUInt(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Uint);
+
+        uint iValue = (uint)Value;
+        Bytes.AddRange(ToBytes(iValue));
+        return Bytes;
+    }
+
+    protected static List<byte> WriteByte(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Byte);
+
+        Bytes.Add((byte)Value);
+        return Bytes;
+    }
+
+    protected static List<byte> WriteString(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.String);
+
+        string Text = (string)Value;
+        Bytes.AddRange(ToBytes(Text.Length));
+        Bytes.AddRange(ToBytes(Text));
+        return Bytes;
+    }
+
+    protected static List<byte> WriteVector(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Vector3);
+
+        Vector3 vValue = (Vector3)Value;
+        Bytes.AddRange(ToBytes(vValue.x));
+        Bytes.AddRange(ToBytes(vValue.y));
+        Bytes.AddRange(ToBytes(vValue.z));
+        return Bytes;
+    }
+
+    protected static List<byte> WriteDouble(object Value, string Name)
+    {
+        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Double);
+
+        Bytes.AddRange(ToBytes((double)Value));
+        return Bytes;
+    }
+
+    public static bool Is(Type Type)
+    {
+        return TypeMap.ContainsKey(Type);
+    }
 }

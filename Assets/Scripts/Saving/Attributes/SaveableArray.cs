@@ -83,7 +83,7 @@ public class SaveableArray : SaveableData
          * #Byte:    1  | 4     | 4                 | 0..x        | 1         | 0..X  | 4
          */
         List<byte> Header = WriteTypeHeader(Obj, Name, VariableType.ArrayStart);
-        string AssemblyName = Obj.GetType().AssemblyQualifiedName;
+        string AssemblyName = Obj.GetType().GetElementType().AssemblyQualifiedName;
         Header.AddRange(ToBytes(AssemblyName.Length));
         Header.AddRange(ToBytes(AssemblyName));
         Header.Add((byte)Dimensions.Length);
@@ -107,9 +107,8 @@ public class SaveableArray : SaveableData
             Indices[i] = 0;
         }
 
-        // skip length info
-        int StartIndex = Index + sizeof(int);
-        int EndIndex = Index + GetArrayHeaderOffset(Data, LoadedArray.Item3);
+        int StartIndex = Index;
+        int EndIndex = Index + InnerLength;
         IterateData(Data, StartIndex, EndIndex, out var FoundArrayVars);
 
         for (int i = 0; i < FoundArrayVars.Count; i++)
@@ -124,12 +123,22 @@ public class SaveableArray : SaveableData
         return GenArray;
     }
 
+    public static int GetHeaderOffset(byte[] Data, int Index)
+    {
+        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
+        Index += AssemblyNameOffset;
+        Index = ReadByte(Data, Index, out var DimSize);
+        Index += DimSize * sizeof(byte);
+        ReadInt(Data, Index, out int Length);
+        return Length + sizeof(int) + DimSize * sizeof(byte) + sizeof(byte) + AssemblyNameOffset;
+    }
+
     public static new FieldInfo _GetMatch(object Target, Tuple<VariableType, int, int> VarParams)
     {
         FieldInfo[] Fields = Target.GetType().GetFields();
         foreach (var Field in Fields)
         {
-            if (!IsArray(Field.FieldType))
+            if (!Is(Field.FieldType))
                 continue;
 
             if (Field.Name.GetHashCode() != VarParams.Item2)
@@ -139,7 +148,6 @@ public class SaveableArray : SaveableData
         }
         return null;
     }
-
 
     public static int ReadArrayTypeHeader(byte[] Data, int Index, out Type ArrayType, out int[] Dimensions, out int InnerLength)
     {
@@ -166,9 +174,8 @@ public class SaveableArray : SaveableData
         return Index;
     }
 
-    public static new Type GetTypeFromVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
+    public static bool Is(Type Type)
     {
-        ReadArrayTypeHeader(Data, FoundVar.Item3 - GetBaseHeaderOffset(), out Type ArrayType, out var _, out var _);
-        return ArrayType;
+        return Type.IsArray;
     }
 }

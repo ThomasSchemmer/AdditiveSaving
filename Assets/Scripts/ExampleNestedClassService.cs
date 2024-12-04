@@ -9,7 +9,10 @@ public class ExampleNestedClassService : ISaveableService
     public class NestedClass
     {
         [SaveableBaseType]
-        public int Var = -1;
+        public int Var;
+
+        [SaveableList]
+        public List<string> Texts = new();
     }
 
     [SaveableClass]

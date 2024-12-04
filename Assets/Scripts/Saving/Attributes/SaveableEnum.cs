@@ -50,13 +50,18 @@ public class SaveableEnum : SaveableData
         return Header;
     }
 
+    public static int GetHeaderOffset(byte[] Data, int Index)
+    {
+        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
+        ReadInt(Data, Index + AssemblyNameOffset, out int Length);
+        return AssemblyNameOffset + Length + sizeof(int);
+    }
+
     public static new object _ReadVar(byte[] Data, Tuple<VariableType, int, int> LoadedEnum)
     {
-        // skip header info
-        int Start = ReadString(Data, LoadedEnum.Item3, out string _) + sizeof(int);
-        int End = LoadedEnum.Item3 + GetEnumHeaderOffset(Data, LoadedEnum.Item3);
+        int Index = ReadEnumTypeHeader(Data, LoadedEnum.Item3 - GetBaseHeaderOffset(), out int Hash, out Type EnumType, out int InnerLength);
 
-        IterateData(Data, Start, End, out var FoundVars);
+        IterateData(Data, Index, Index + InnerLength, out var FoundVars);
 
         object EnumValue = ReadType(Data, FoundVars[0]);
         return EnumValue;
@@ -67,7 +72,7 @@ public class SaveableEnum : SaveableData
         FieldInfo[] Fields = Target.GetType().GetFields();
         foreach (var Field in Fields)
         {
-            if (!Field.FieldType.IsEnum)
+            if (!Is(Field.FieldType))
                 continue;
 
             if (Field.Name.GetHashCode() != VarParams.Item2)
@@ -76,12 +81,6 @@ public class SaveableEnum : SaveableData
             return Field;
         }
         return null;
-    }
-
-    public static new Type GetTypeFromVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
-    {
-        ReadEnumTypeHeader(Data, FoundVar.Item3 - GetBaseHeaderOffset(), out var _, out Type EnumType, out var _);
-        return EnumType;
     }
 
     public static int ReadEnumTypeHeader(byte[] Data, int Index, out int Hash, out Type EnumType, out int InnerLength)
@@ -97,5 +96,10 @@ public class SaveableEnum : SaveableData
         EnumType = Type.GetType(AssemblyName);
         Index = ReadInt(Data, Index, out InnerLength);
         return Index;
+    }
+
+    public static bool Is(Type Type)
+    {
+        return Type.IsEnum;
     }
 }

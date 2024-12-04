@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Xml.Linq;
 using UnityEngine;
 using static SaveGameManager;
 
@@ -22,6 +21,7 @@ public abstract class SaveableData : Attribute {
         { typeof(Vector3), VariableType.Vector3 },
     }; 
     
+    // todo: prettify
     protected static Dictionary<VariableType, Type> ClassMap = new()
     {
         {VariableType.Byte, typeof(SaveableBaseType)},
@@ -52,12 +52,6 @@ public abstract class SaveableData : Attribute {
 
     public abstract List<byte> Write(object Obj, string Name);
 
-    public static List<byte> _Write(object Obj, string Name)
-    {
-        // has to be overwritten in subclasses
-        throw new NotImplementedException();
-    }
-
     public static List<byte> Save(object Obj, string Name)
     {
         FieldInfo[] Infos = Obj.GetType().GetFields();
@@ -80,13 +74,12 @@ public abstract class SaveableData : Attribute {
             throw new Exception("Nothing saved for " + Obj.ToString() + " - are you missing a type mapping?");
         }
 
-        List<byte> Data = WriteClassTypeHeader(Obj, Name, InnerData.Count);
+        List<byte> Data = SaveableClass.WriteHeader(Obj, Name, InnerData.Count);
         Data.AddRange(InnerData);
         Data.AddRange(WriteTypeHeader(Obj, Name, VariableType.ClassEnd));
 
         return Data;
     }
-
 
     public static List<byte> WriteKnownType(object Value, string Name)
     {
@@ -94,37 +87,18 @@ public abstract class SaveableData : Attribute {
         if (!TryGetKnownType(Type, out var FoundVarType))
             return new();
 
+        if (SaveableBaseType.Is(Type))
+        {
+            return SaveableBaseType._Write(Value, Name);
+        }
+
+        //c# has problems detecting subclasses in generic types
         switch (FoundVarType)
         {
-            case VariableType.Byte: return WriteByte(Value, Name);
-            case VariableType.Int: return WriteInt(Value, Name);
-            case VariableType.Uint: return WriteUInt(Value, Name);
-            case VariableType.Double: return WriteDouble(Value, Name);
-            case VariableType.String: return WriteString(Value, Name);
-            case VariableType.Vector3: return WriteVector(Value, Name);
-            //c# has problems detecting subclasses in generic types
             case VariableType.EnumStart: return SaveableEnum._Write(Value, Name);
             case VariableType.ListStart: return SaveableList._Write(Value, Name);
             case VariableType.ArrayStart: return SaveableArray._Write(Value, Name);
             case VariableType.DictionaryStart: return SaveableDictionary._Write(Value, Name);
-            default:
-                throw new Exception("Missing type registry for known type");
-        }
-    }
-
-    public static Type GetTypeFromVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
-    {
-        if (TypeMap.Values.Contains(FoundVar.Item1))
-        {
-            return TypeMap.Where(Pair => Pair.Value == FoundVar.Item1).FirstOrDefault().Key;
-        }
-        switch (FoundVar.Item1) 
-        {
-            case VariableType.ClassStart: return SaveableClass.GetTypeFromVar(Data, FoundVar);
-            case VariableType.EnumStart: return SaveableEnum.GetTypeFromVar(Data, FoundVar);
-            case VariableType.ListStart: return SaveableList.GetTypeFromVar(Data, FoundVar);
-            case VariableType.ArrayStart: return SaveableArray.GetTypeFromVar(Data, FoundVar);
-            //case VariableType.DictionaryStart: return SaveableDictionary._Write(Value, Name);
             default:
                 throw new Exception("Missing type registry for known type");
         }
@@ -154,12 +128,6 @@ public abstract class SaveableData : Attribute {
         return Variable;
     }
 
-    /** Reads the variable provided with the meta data according to its subclasses definition */
-    public static object _ReadVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
-    {
-        // has to be overwritten in subclasses
-        throw new NotImplementedException();
-    }
 
     public static FieldInfo GetMatch(object Target, Tuple<VariableType, int, int> FoundVar)
     {
@@ -187,7 +155,7 @@ public abstract class SaveableData : Attribute {
     /** Tries to load the passed in data into the target's best fitting variable */
     public static void LoadTo(object Target, byte[] Data, int MinIndex, int MaxIndex)
     {
-        int Index = ReadClassTypeHeader(Data, MinIndex, out int BeginHash, out Type ClassType, out int _);
+        int Index = SaveableClass.ReadHeader(Data, MinIndex, out int BeginHash, out Type ClassType, out int _);
         if (Target.GetType() != ClassType)
             return;
 
@@ -236,12 +204,12 @@ public abstract class SaveableData : Attribute {
             case VariableType.Double: VarOffset = GetDoubleVarOffset(); break;
             case VariableType.String: VarOffset = GetStringVarOffset(Data, Index); break;
             case VariableType.Vector3: VarOffset = GetVectorVarOffset(); break;
-            case VariableType.ClassStart: VarOffset = GetClassHeaderOffset(Data, Index); break;
-            case VariableType.ListStart: VarOffset = GetListHeaderOffset(Data, Index); break;
-            case VariableType.ArrayStart: VarOffset = GetArrayHeaderOffset(Data, Index); break;
+            case VariableType.ClassStart: VarOffset = SaveableClass.GetHeaderOffset(Data, Index); break;
+            case VariableType.ListStart: VarOffset = SaveableList.GetHeaderOffset(Data, Index); break;
+            case VariableType.ArrayStart: VarOffset = SaveableArray.GetHeaderOffset(Data, Index); break;
             case VariableType.WrapperStart: VarOffset = GetWrapperHeaderOffset(Data, Index); break;
-            case VariableType.EnumStart: VarOffset = GetEnumHeaderOffset(Data, Index); break;
-            case VariableType.DictionaryStart: VarOffset = GetDictionaryHeaderOffset(Data, Index); break;
+            case VariableType.EnumStart: VarOffset = SaveableEnum.GetHeaderOffset(Data, Index); break;
+            case VariableType.DictionaryStart: VarOffset = SaveableDictionary.GetHeaderOffset(Data, Index); break;
             case VariableType.ListEnd: VarOffset = 0; break;
             case VariableType.ClassEnd: VarOffset = 0; break;
             case VariableType.ArrayEnd: VarOffset = 0; break;
@@ -253,32 +221,49 @@ public abstract class SaveableData : Attribute {
         }
         return Index + VarOffset;
     }
+
+    //**************************** static overrides **************************************************************
+
+
+    /** Reads the variable provided with the meta data according to its subclasses definition */
+    public static object _ReadVar(byte[] Data, Tuple<VariableType, int, int> FoundVar)
+    {
+        // has to be overwritten in subclasses
+        throw new NotImplementedException();
+    }
+    public static List<byte> _Write(object Obj, string Name)
+    {
+        // has to be overwritten in subclasses
+        throw new NotImplementedException();
+    }
+
+
     //**************************** Utility **************************************************************
 
     protected static bool TryGetKnownType(Type Type, out VariableType VariableType)
     {
-        if (TypeMap.ContainsKey(Type))
+        if (SaveableBaseType.Is(Type))
         {
             VariableType = TypeMap[Type];
             return true;
         }
         // c# is weird for saving enums, converts it into a basetype?
-        if (Type.IsEnum)
+        if (SaveableEnum.Is(Type))
         {
             VariableType = VariableType.EnumStart;
             return true;
         }
-        if (Type.IsArray)
+        if (SaveableArray.Is(Type))
         {
             VariableType = VariableType.ArrayStart;
             return true;
         }
-        if (IsGenericList(Type))
+        if (SaveableList.Is(Type))
         {
             VariableType = VariableType.ListStart;
             return true;
         }
-        if (IsGenericDictionary(Type))
+        if (SaveableDictionary.Is(Type))
         {
             VariableType = VariableType.DictionaryStart;
             return true;
@@ -286,8 +271,6 @@ public abstract class SaveableData : Attribute {
         VariableType = default;
         return false;
     }
-
-
 
     protected static object ReadType(byte[] Data, Tuple<VariableType, int, int> Variable)
     {
@@ -387,50 +370,10 @@ public abstract class SaveableData : Attribute {
         return sizeof(double) * 3;
     }
 
-    public static int ReadClassTypeHeader(byte[] Data, int Index, out int Hash, out Type ClassType, out int InnerLength)
-    {
-        Index = ReadByte(Data, Index, out byte bVarType);
-        VariableType VarType = (VariableType)bVarType;
-        if (VarType != VariableType.ClassStart)
-        {
-            throw new Exception("Expected a class start, but found " + VarType + " instead!");
-        }
-        Index = ReadInt(Data, Index, out Hash);
-        Index = ReadString(Data, Index, out string AssemblyName);
-        ClassType = Type.GetType(AssemblyName);
-        Index = ReadInt(Data, Index, out InnerLength);
-        return Index;
-    }
 
     public static int GetBaseHeaderOffset()
     {
         return sizeof(int) + sizeof(byte);
-    }
-
-    protected static int GetClassHeaderOffset(byte[] Data, int Index)
-    {
-        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
-        Index += AssemblyNameOffset;
-        ReadInt(Data, Index, out int Length);
-        return AssemblyNameOffset + Length + sizeof(int);
-    }
-
-    protected static int GetListHeaderOffset(byte[] Data, int Index)
-    {
-        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
-        Index += AssemblyNameOffset;
-        ReadInt(Data, Index, out int Length);
-        return AssemblyNameOffset + Length + sizeof(int);
-    }
-
-    protected static int GetArrayHeaderOffset(byte[] Data, int Index)
-    {
-        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
-        Index += AssemblyNameOffset;
-        Index = ReadByte(Data, Index, out var DimSize);
-        Index += DimSize * sizeof(byte);
-        ReadInt(Data, Index, out int Length);
-        return Length + sizeof(int) + DimSize * sizeof(byte) + sizeof(byte) + AssemblyNameOffset;
     }
 
     protected static int GetWrapperHeaderOffset(byte[] Data, int Index)
@@ -438,37 +381,6 @@ public abstract class SaveableData : Attribute {
         Index = ReadByte(Data, Index, out var _);
         ReadInt(Data, Index, out int Length);
         return Length + sizeof(int) + sizeof(byte);
-    }
-
-    protected static int GetEnumHeaderOffset(byte[] Data, int Index)
-    {
-        int AssemblyNameOffset = GetStringVarOffset(Data, Index);
-        ReadInt(Data, Index + AssemblyNameOffset, out int Length);
-        return AssemblyNameOffset + Length + sizeof(int);
-    }
-
-    protected static int GetDictionaryHeaderOffset(byte[] Data, int Index)
-    {
-        ReadInt(Data, Index, out int Length);
-        return Length + sizeof(int);
-        return 0;
-    }
-
-    protected static bool IsGenericList(Type Type)
-    {
-        return (Type.IsGenericType && (Type.GetGenericTypeDefinition() == typeof(List<>)));
-    }
-
-    protected static bool IsGenericDictionary(Type Type)
-    {
-        return Type.IsGenericType && 
-            (Type.GetGenericTypeDefinition() == typeof(Dictionary<,>) ||
-            Type.GetGenericTypeDefinition() == typeof(SerializedDictionary<,>));
-    }
-
-    protected static bool IsArray(Type Type)
-    {
-        return Type.IsArray;
     }
 
     protected static bool IsEndType(VariableType Type)
@@ -497,61 +409,6 @@ public abstract class SaveableData : Attribute {
         return Encoding.UTF8.GetBytes(Value).ToList();
     }
 
-    protected static List<byte> WriteInt(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Int);
-
-        int iValue = (int)Value;
-        Bytes.AddRange(ToBytes(iValue));
-        return Bytes;
-    }
-
-    protected static List<byte> WriteUInt(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Uint);
-
-        uint iValue = (uint)Value;
-        Bytes.AddRange(ToBytes(iValue));
-        return Bytes;
-    }
-
-    protected static List<byte> WriteByte(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Byte);
-
-        Bytes.Add((byte)Value);
-        return Bytes;
-    }
-
-    protected static List<byte> WriteString(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.String);
-
-        string Text = (string)Value;
-        Bytes.AddRange(ToBytes(Text.Length));
-        Bytes.AddRange(ToBytes(Text));
-        return Bytes;
-    }
-
-    protected static List<byte> WriteVector(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Vector3);
-
-        Vector3 vValue = (Vector3)Value;
-        Bytes.AddRange(ToBytes(vValue.x));
-        Bytes.AddRange(ToBytes(vValue.y));
-        Bytes.AddRange(ToBytes(vValue.z));
-        return Bytes;
-    }
-
-    protected static List<byte> WriteDouble(object Value, string Name)
-    {
-        List<byte> Bytes = WriteTypeHeader(Value, Name, VariableType.Double);
-
-        Bytes.AddRange(ToBytes((double)Value));
-        return Bytes;
-    }
-
     protected static List<byte> WriteTypeHeader(object Obj, string Name, VariableType Type)
     {
         int Hash = Name.GetHashCode();
@@ -559,20 +416,6 @@ public abstract class SaveableData : Attribute {
         Bytes.Add((byte)Type);
         Bytes.AddRange(ToBytes(Hash));
         return Bytes;
-    }
-
-    protected static List<byte> WriteClassTypeHeader(object Obj, string Name, int InnerLength)
-    {
-        /*
-         * Var:    Type | Hash  | ClassNameLen  | ClassName | InnerLen    
-         * #Byte:    1  | 4     | 4             | 0..X      | 4 
-         */
-        List<byte> Header = WriteTypeHeader(Obj, Name, VariableType.ClassStart);
-        string AssemblyName = Obj.GetType().AssemblyQualifiedName;
-        Header.AddRange(ToBytes(AssemblyName.Length));
-        Header.AddRange(ToBytes(AssemblyName));
-        Header.AddRange(ToBytes(InnerLength));
-        return Header;
     }
 
     protected static bool TryGetSaveable(FieldInfo Info, Type TargetType, out SaveableData FoundSaveable)
